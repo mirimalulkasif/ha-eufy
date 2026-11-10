@@ -35,6 +35,7 @@ Copy `custom_components/eufy_cameras` into your Home Assistant `custom_component
 - Live video streaming is not wired in this lean client; use the eufy-security-ws / go2rtc path for RTSP when you need a live feed.
 - Motion and ring binary sensors pulse from websocket push events.
 - The **Enabled** switch maps to the device `enabled` property (arm / disarm style control).
+- If eufy-security-ws authenticates but lists **0 devices**, your account has likely moved to Eufy’s Mega (v6) cloud. Prefer a Mega-based stack (for example [ha-eufy-sdk-bridge](https://github.com/mega-yfue/ha-eufy-sdk-bridge)) instead of the legacy ws add-on.
 
 ## License
 
