@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Eufy Cameras",
+        "description": "Connect to a running eufy-security-ws server. The add-on handles Eufy cloud login; this integration only imports doorbell and indoor cameras.",
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to eufy-security-ws. Check host, port, and that the add-on is running.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "This eufy-security-ws server is already configured."
+    }
+  }
+}

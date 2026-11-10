@@ -1,0 +1,11 @@
+{
+  "domain": "eufy_cameras",
+  "name": "Eufy Cameras",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/mirimalulkasif/ha-eufy",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/mirimalulkasif/ha-eufy/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}
