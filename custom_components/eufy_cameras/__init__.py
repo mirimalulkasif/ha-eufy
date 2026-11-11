@@ -1,4 +1,4 @@
-"""Eufy Cameras Home Assistant integration."""
+"""Eufy Cameras Home Assistant integration (Mega SDK bridge)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import DEFAULT_HOST, DEFAULT_PORT, DOMAIN, PLATFORMS
 from .coordinator import EufyCamerasCoordinator
-from .ws_client import EufyWsClient, EufyWsError
+from .mega_client import EufyMegaClient, EufyMegaError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -24,19 +24,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: EufyConfigEntry) -> bool
     host = entry.data.get(CONF_HOST, DEFAULT_HOST)
     port = int(entry.data.get(CONF_PORT, DEFAULT_PORT))
     session = async_get_clientsession(hass)
-    client = EufyWsClient(host=host, port=port, session=session)
+    client = EufyMegaClient(host=host, port=port, session=session)
 
     try:
         await client.connect()
     except Exception as err:  # noqa: BLE001
         await client.disconnect()
         raise ConfigEntryNotReady(
-            f"Cannot connect to eufy-security-ws at {host}:{port}"
+            f"Cannot connect to Mega SDK bridge at {host}:{port}: {err}"
         ) from err
 
     if not client.devices:
         _LOGGER.warning(
-            "Connected to eufy-security-ws but no doorbell/indoor cameras were found"
+            "Connected to Mega bridge but no doorbell/indoor cameras were found "
+            "(looking for T82xx doorbells and T84xx indoor cams)"
         )
 
     coordinator = EufyCamerasCoordinator(hass, client)
@@ -46,7 +47,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: EufyConfigEntry) -> bool
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     async def _on_event(event: dict) -> None:
-        serial = event.get("serialNumber") or event.get("device")
+        serial = event.get("serialNumber") or event.get("deviceSn") or event.get("device")
         if serial and serial in client.devices:
             coordinator.async_set_updated_data(dict(client.devices))
 
@@ -65,6 +66,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: EufyConfigEntry) -> boo
     coordinator = entry.runtime_data
     try:
         await coordinator.client.disconnect()
-    except EufyWsError:
+    except EufyMegaError:
         pass
     return unload_ok

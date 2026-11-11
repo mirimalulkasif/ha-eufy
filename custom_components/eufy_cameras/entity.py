@@ -36,11 +36,12 @@ class EufyCameraEntity(CoordinatorEntity[EufyCamerasCoordinator]):
     def device_info(self) -> DeviceInfo:
         data = self.device_data
         kind = data.get("kind", "camera")
+        model_name = data.get("model_name")
         return DeviceInfo(
             identifiers={(DOMAIN, self.serial)},
             name=data.get("name") or self.serial,
             manufacturer="Eufy",
-            model=str(data.get("model") or kind),
+            model=str(model_name or data.get("model") or kind),
             serial_number=self.serial,
         )
 

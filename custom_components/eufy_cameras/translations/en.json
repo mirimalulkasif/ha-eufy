@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Eufy Cameras",
-        "description": "Connect to a running eufy-security-ws server. The add-on handles Eufy cloud login; this integration only imports doorbell and indoor cameras.",
+        "description": "Connect to a running ha-eufy-sdk-bridge (Mega / v6 cloud). The bridge handles Eufy login and 2FA; this integration imports doorbell (T82xx) and indoor (T84xx) cameras.",
         "data": {
           "host": "Host",
           "port": "Port"
@@ -11,11 +11,11 @@
       }
     },
     "error": {
-      "cannot_connect": "Could not connect to eufy-security-ws. Check host, port, and that the add-on is running.",
+      "cannot_connect": "Could not connect to the Mega SDK bridge. Check host, port, that the bridge is running, and that auth is ok (2FA/captcha completed).",
       "unknown": "Unexpected error."
     },
     "abort": {
-      "already_configured": "This eufy-security-ws server is already configured."
+      "already_configured": "This Mega SDK bridge is already configured."
     }
   }
 }

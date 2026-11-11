@@ -10,15 +10,15 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN
-from .ws_client import EufyWsClient, EufyWsError
+from .mega_client import EufyMegaClient, EufyMegaError
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class EufyCamerasCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
-    """Poll eufy-security-ws for doorbell / indoor cameras."""
+    """Poll the Mega SDK bridge for doorbell / indoor cameras."""
 
-    def __init__(self, hass: HomeAssistant, client: EufyWsClient) -> None:
+    def __init__(self, hass: HomeAssistant, client: EufyMegaClient) -> None:
         super().__init__(
             hass,
             _LOGGER,
@@ -30,6 +30,6 @@ class EufyCamerasCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
         try:
             await self.client.refresh()
-        except EufyWsError as err:
+        except EufyMegaError as err:
             raise UpdateFailed(str(err)) from err
         return dict(self.client.devices)

@@ -1,4 +1,4 @@
-"""Sensors for Eufy doorbell / indoor cameras."""
+"""Sensors for Eufy doorbell / indoor cameras (Mega bridge)."""
 
 from __future__ import annotations
 
@@ -30,6 +30,18 @@ KIND_DESC = SensorEntityDescription(
     entity_category=EntityCategory.DIAGNOSTIC,
 )
 
+MODEL_DESC = SensorEntityDescription(
+    key="model",
+    name="Model",
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
+
+POWER_DESC = SensorEntityDescription(
+    key="power",
+    name="Power",
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -40,8 +52,17 @@ async def async_setup_entry(
     entities: list[SensorEntity] = []
     for serial, data in coordinator.data.items():
         entities.append(EufyKindSensor(coordinator, serial))
+        entities.append(EufyModelSensor(coordinator, serial))
+        if data.get("power"):
+            entities.append(EufyPowerSensor(coordinator, serial))
         props = data.get("properties") or {}
-        if "battery" in props or "batteryLevel" in props:
+        caps = {str(c).lower() for c in (data.get("capabilities") or [])}
+        if (
+            "battery" in props
+            or "batteryLevel" in props
+            or "battery" in caps
+            or data.get("power") == "battery"
+        ):
             entities.append(EufyBatterySensor(coordinator, serial))
     async_add_entities(entities)
 
@@ -80,3 +101,31 @@ class EufyKindSensor(EufyCameraEntity, SensorEntity):
     @property
     def native_value(self) -> str | None:
         return self.device_data.get("kind")
+
+
+class EufyModelSensor(EufyCameraEntity, SensorEntity):
+    """Hardware model code (e.g. T8224 / T8400)."""
+
+    entity_description = MODEL_DESC
+
+    def __init__(self, coordinator, serial: str) -> None:
+        super().__init__(coordinator, serial)
+        self._attr_unique_id = f"eufy_cameras_{serial}_model"
+
+    @property
+    def native_value(self) -> str | None:
+        return self.device_data.get("model")
+
+
+class EufyPowerSensor(EufyCameraEntity, SensorEntity):
+    """wired | battery."""
+
+    entity_description = POWER_DESC
+
+    def __init__(self, coordinator, serial: str) -> None:
+        super().__init__(coordinator, serial)
+        self._attr_unique_id = f"eufy_cameras_{serial}_power"
+
+    @property
+    def native_value(self) -> str | None:
+        return self.device_data.get("power")
