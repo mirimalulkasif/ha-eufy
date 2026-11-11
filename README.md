@@ -15,11 +15,15 @@ This project is not affiliated with Anker or Eufy.
 
 ### 1. Bridge on the same VM
 
-SSH into the VM and run:
+You need a **normal Linux shell** (`$` or `#`), not the Home Assistant CLI (`ha>`).
+
+If you see `unknown command "sudo" for "ha"`, you are inside `ha>` — type `login` (HA OS console) or open an SSH session that drops you into bash, or run the bridge on another machine on your LAN instead.
+
+Then:
 
 ```bash
-sudo mkdir -p /opt/eufy-bridge-data
-sudo docker run -d --name eufy-bridge --restart unless-stopped --network host \
+mkdir -p /opt/eufy-bridge-data
+docker run -d --name eufy-bridge --restart unless-stopped --network host \
   -e EUFY_EMAIL='you@example.com' \
   -e EUFY_PASSWORD='your-password' \
   -e EUFY_COUNTRY='IL' \
