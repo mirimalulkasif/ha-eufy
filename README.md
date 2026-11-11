@@ -80,8 +80,10 @@ services:
 
 | Device | Models | Entities |
 |--------|--------|----------|
-| Doorbell | T82xx (e.g. T8224) | Camera, motion, person, ring, switches, battery, model |
-| Indoor | T84xx (e.g. T8400) | Camera, motion, person, switches, battery, model, power |
+| Doorbell | T82xx (e.g. T8224) | Camera (**stills** from push/event thumbnails — no live WebRTC), motion, person, ring, switches, battery, model |
+| Indoor | T84xx (e.g. T8400) | Camera (live RTSP via go2rtc), motion, person, switches, battery, model, power |
+
+Doorbell live video on Mega often opens a black window (same limitation as the Homebridge plugin). The integration shows the latest motion/ring still instead. Trigger the doorbell or walk in front of it once if the tile is empty, then refresh the card. For indoor live video, if RTSP is black, set the integration **host** to the VM’s LAN IP (not `127.0.0.1`) so HA Core can reach go2rtc.
 
 ## Requirements
 

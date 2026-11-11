@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 from homeassistant.components.camera import Camera, CameraEntityFeature
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -31,11 +32,10 @@ async def async_setup_entry(
 
 
 class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
-    """Camera with Mega-bridge snapshots and RTSP stream source."""
+    """Indoor: live RTSP via go2rtc. Doorbell: push/stored stills (no broken live)."""
 
     _attr_has_entity_name = True
     _attr_name = None
-    _attr_supported_features = CameraEntityFeature.STREAM
 
     def __init__(
         self, coordinator: EufyCamerasCoordinator, serial: str
@@ -45,6 +45,17 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
         self.serial = serial
         self._attr_unique_id = f"eufy_cameras_{serial}_camera"
         self._last_image: bytes | None = None
+        kind = (coordinator.data.get(serial) or {}).get("kind")
+        # Doorbells (T82xx) often cannot open a usable live WebRTC/P2P feed in this
+        # stack — same as homebridge-eufy-cameras "picture stream" mode. Advertise
+        # stills only so HA does not open a black RTSP window.
+        if kind == "doorbell":
+            self._attr_supported_features = CameraEntityFeature(0)
+            self._stills_only = True
+        else:
+            self._attr_supported_features = CameraEntityFeature.STREAM
+            self._stills_only = False
+        coordinator.client.on_event(self._handle_event)
 
     @property
     def device_data(self) -> dict[str, Any]:
@@ -76,30 +87,49 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
             ATTR_MODEL: data.get("model"),
             "power": data.get("power"),
             "capabilities": data.get("capabilities"),
+            "stream_mode": "stills" if self._stills_only else "live",
         }
 
     @property
     def is_streaming(self) -> bool:
+        if self._stills_only:
+            return False
         return bool(self.device_data.get("streaming"))
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
         """Fetch a JPEG still from the Mega bridge."""
+        client = self.coordinator.client
+        # Prefer retained / event stills first (doorbell-friendly), then auto/live.
+        for mode in ("stored", "", "live"):
+            try:
+                data = await client.fetch_snapshot(self.serial, mode=mode)
+            except EufyMegaError as err:
+                _LOGGER.debug(
+                    "Snapshot %s mode=%r failed: %s", self.serial, mode or "auto", err
+                )
+                continue
+            if data:
+                self._last_image = data
+                return data
+
+        # Ask the bridge to pull the newest event cover, then retry stored.
         try:
-            data = await self.coordinator.client.fetch_snapshot(
-                self.serial, mode="stored"
-            )
+            await client.command("event.refresh", sn=self.serial)
+            data = await client.fetch_snapshot(self.serial, mode="stored")
+            if data:
+                self._last_image = data
+                return data
         except EufyMegaError as err:
-            _LOGGER.debug("Snapshot failed for %s: %s", self.serial, err)
-            return self._last_image
-        if data:
-            self._last_image = data
-            return data
+            _LOGGER.debug("event.refresh/snapshot failed for %s: %s", self.serial, err)
+
         return self._last_image
 
     async def stream_source(self) -> str | None:
-        """Return RTSP URL from the bridge / go2rtc."""
+        """Return RTSP URL from the bridge / go2rtc (indoor / live devices only)."""
+        if self._stills_only:
+            return None
         try:
             result = await self.coordinator.client.stream_urls(self.serial)
         except EufyMegaError as err:
@@ -107,11 +137,62 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
             return None
         rtsp = result.get("rtsp")
         if rtsp:
-            return str(rtsp)
-        # Fall back to rewriting the HTTP path against the configured host
+            return self._rewrite_loopback_host(str(rtsp))
         path = result.get("path") or self.device_data.get("stream_path")
         if path:
             host = self.coordinator.client.host
             port = self.coordinator.client.port
             return f"http://{host}:{port}{path}"
         return None
+
+    def _rewrite_loopback_host(self, url: str) -> str:
+        """Point RTSP at the configured bridge host, not the bridge's 127.0.0.1."""
+        parsed = urlparse(url)
+        if parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
+            return url
+        host = self.coordinator.client.host
+        if not host or host in ("127.0.0.1", "localhost"):
+            # HA Core container cannot use the bridge's loopback; keep as-is and log.
+            _LOGGER.debug(
+                "Stream URL uses loopback and bridge host is also loopback (%s) — "
+                "if the picture is black, set the integration host to the HA/VM LAN IP",
+                host,
+            )
+            return url
+        port = parsed.port
+        netloc = f"{host}:{port}" if port else host
+        return urlunparse(parsed._replace(netloc=netloc))
+
+    @callback
+    def _handle_event(self, event: dict) -> None:
+        """Invalidate / refresh stills when motion or ring push arrives."""
+        serial = (
+            event.get("serialNumber")
+            or event.get("deviceSn")
+            or event.get("device")
+        )
+        if serial != self.serial:
+            return
+        name = str(
+            event.get("eventName") or event.get("event") or ""
+        ).lower()
+        if name in (
+            "motion",
+            "persondetected",
+            "doorbellpress",
+            "eventimageupdated",
+        ) or "motion" in name or "doorbell" in name:
+            # Clear cache so the next card fetch pulls a fresh stored still.
+            self._last_image = None
+            self.hass.async_create_task(self._prefetch_still())
+
+    async def _prefetch_still(self) -> None:
+        try:
+            await self.coordinator.client.command(
+                "event.refresh", sn=self.serial
+            )
+        except EufyMegaError:
+            pass
+        image = await self.async_camera_image()
+        if image:
+            self.async_write_ha_state()
