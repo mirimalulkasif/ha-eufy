@@ -3,19 +3,39 @@
     "step": {
       "user": {
         "title": "Eufy Cameras",
-        "description": "Connect to a running ha-eufy-sdk-bridge (Mega / v6 cloud). The bridge handles Eufy login and 2FA; this integration imports doorbell (T82xx) and indoor (T84xx) cameras.",
+        "description": "Install and start the **Eufy Cameras Bridge** add-on from this repository first (Settings → Add-ons). Then enter the bridge host/port. On HA OS / Supervised use your Home Assistant host IP and port 3000 — not 127.0.0.1.",
         "data": {
           "host": "Host",
           "port": "Port"
         }
+      },
+      "hassio_confirm": {
+        "title": "Eufy Cameras Bridge discovered",
+        "description": "The Eufy Cameras Bridge add-on was found at {host}:{port}. Continue to connect."
+      },
+      "mfa": {
+        "title": "Eufy 2FA",
+        "description": "Enter the verification code Eufy sent (email/SMS/app).",
+        "data": {
+          "mfa_code": "2FA code"
+        }
+      },
+      "captcha": {
+        "title": "Eufy captcha",
+        "description": "{image_note}",
+        "data": {
+          "captcha_code": "Captcha answer"
+        }
       }
     },
     "error": {
-      "cannot_connect": "Could not connect to the Mega SDK bridge. Check host, port, that the bridge is running, and that auth is ok (2FA/captcha completed).",
+      "cannot_connect": "Could not reach the Mega bridge. Install/start the Eufy Cameras Bridge add-on, check host/port, and wait until it is running.",
+      "invalid_auth": "Code rejected. Try again, or restart the bridge add-on to request a fresh challenge.",
       "unknown": "Unexpected error."
     },
     "abort": {
-      "already_configured": "This Mega SDK bridge is already configured."
+      "already_configured": "This Mega bridge is already configured.",
+      "unknown": "Unexpected discovery payload."
     }
   }
 }

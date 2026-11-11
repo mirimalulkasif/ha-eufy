@@ -1,52 +1,50 @@
 # Eufy Cameras (Home Assistant)
 
-Home Assistant custom integration for **Eufy** doorbell and indoor cameras on the **Mega (v6) cloud**.
+Home Assistant integration for **Eufy** doorbell (T82xx) and indoor (T84xx) cameras on the **Mega (v6) cloud**.
 
-It talks to a running [ha-eufy-sdk-bridge](https://github.com/mega-yfue/ha-eufy-sdk-bridge) and exposes only:
+The Mega Node SDK cannot run inside a Python custom component, so this repository ships **both**:
+
+1. **Eufy Cameras Bridge** — Supervisor add-on (wraps [`ha-eufy-sdk-bridge`](https://github.com/mega-yfue/ha-eufy-sdk-bridge))
+2. **Eufy Cameras** — HACS integration (entities, snapshots, RTSP, motion/ring)
+
+You install both from the **same GitHub URL** in the HA UI. No separate Docker SSH step on HA OS / Supervised.
+
+This project is not affiliated with Anker or Eufy.
+
+## Install on HA OS / Supervised (GUI)
+
+### 1. Bridge add-on
+
+1. **Settings → Add-ons → Add-on store → ⋮ → Repositories**
+2. Add: `https://github.com/mirimalulkasif/ha-eufy`
+3. Install **Eufy Cameras Bridge**
+4. **Configuration**: eufy email, password, country (same as the Eufy app)
+5. **Start** the add-on (wait until it is running)
+
+### 2. Integration (HACS)
+
+1. HACS → Integrations → ⋮ → Custom repositories → same URL, category **Integration**
+2. Download **Eufy Cameras** → restart Home Assistant
+3. **Settings → Devices & services → Add integration → Eufy Cameras**
+4. Confirm discovery, or enter your **HA host IP** and port **3000** (not `127.0.0.1` from inside the HA container)
+5. If Eufy asks for **2FA / captcha**, enter it in the setup dialog
+
+### Entities
 
 | Device | Models | Entities |
 |--------|--------|----------|
-| **Doorbell** | T82xx (e.g. T8224) | Camera (snapshot + RTSP), motion, person, ring, enabled / status LED / light switches, battery, model, kind |
-| **Indoor camera** | T84xx (e.g. T8400) | Camera (snapshot + RTSP), motion, person, enabled / status LED / light switches, battery, model, kind, power |
+| Doorbell | T82xx (e.g. T8224) | Camera, motion, person, ring, switches, battery, model |
+| Indoor | T84xx (e.g. T8400) | Camera, motion, person, switches, battery, model, power |
 
-Other Eufy product types are ignored. This project is not affiliated with Anker or Eufy.
+## HA Container / Core (no Supervisor)
+
+If your VM runs Home Assistant **Container** (no Add-on store), run the bridge container on that VM (host network), then add the HACS integration pointed at the VM’s LAN IP / `3000`. See the [bridge docs](https://github.com/mega-yfue/ha-eufy-sdk-bridge/blob/main/docs/docker-compose.md).
 
 ## Requirements
 
-1. A working **ha-eufy-sdk-bridge** instance logged into your Eufy Mega account  
-   (Docker / compose from the bridge repo — complete 2FA/captcha there until `auth.state` is `ok`).
-2. Home Assistant **2024.1** or newer.
-3. The bridge’s go2rtc RTSP port reachable from Home Assistant if you want live streams (default `8554`).
-
-> Legacy [eufy-security-ws](https://github.com/bropat/eufy-security-ws) is **not** supported anymore. Mega accounts return 0 devices on that stack.
-
-## Install (HACS)
-
-1. HACS → Integrations → ⋮ → Custom repositories  
-2. Add this repository URL, category **Integration**  
-3. Install **Eufy Cameras**  
-4. Restart Home Assistant  
-5. Settings → Devices & services → Add integration → **Eufy Cameras**  
-6. Enter the host/port of the Mega bridge (default `127.0.0.1:3000` — WebSocket path is `/ws`)
-
-### Manual install
-
-Copy `custom_components/eufy_cameras` into your Home Assistant `custom_components/` folder, restart, then add the integration.
-
-## What works
-
-- **Discovery** of Mega doorbell / indoor cameras (`devices.list`, filtered by model prefix).
-- **Snapshots** via `GET /snapshot/<sn>?mode=stored` (falls back to the bridge default).
-- **Live stream** source from `stream.start` → go2rtc RTSP URL.
-- **Motion / person / doorbell ring** binary sensors from bridge push events.
-- **Property switches** for enabled/privacy, status LED, and light when reported.
-- **Battery / model / power** diagnostic sensors.
-
-## Notes
-
-- Point the integration at the **bridge HTTP/WS port** (usually `3000`), not the go2rtc RTSP port.
-- If connect fails with an auth-state message, finish 2FA/captcha on the bridge first.
-- Doorbells that cannot open WebRTC live video on 32-bit hosts still get stored snapshots and motion/ring events through the bridge.
+- Home Assistant **2024.1+**
+- Bridge add-on / image: **amd64** or **aarch64** only
+- Prefer a dedicated eufy account shared into your home (admin) so the phone app does not kick the bridge session
 
 ## License
 

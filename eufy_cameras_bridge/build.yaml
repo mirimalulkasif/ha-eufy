@@ -1,0 +1,6 @@
+# Builds FROM the published Mega bridge image (thin Supervisor wrapper).
+build_from:
+  aarch64: ghcr.io/mega-yfue/ha-eufy-sdk-bridge:latest
+  amd64: ghcr.io/mega-yfue/ha-eufy-sdk-bridge:latest
+labels:
+  org.opencontainers.image.source: "https://github.com/mirimalulkasif/ha-eufy"

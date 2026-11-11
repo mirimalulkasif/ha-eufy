@@ -1,0 +1,52 @@
+# https://developers.home-assistant.io/docs/add-ons/configuration#add-on-configuration
+name: Eufy Cameras Bridge
+version: "2.1.0"
+slug: eufy_cameras_bridge
+description: >-
+  Runs the Mega ha-eufy-sdk-bridge (login, WS control, snapshots, go2rtc RTSP)
+  for the Eufy Cameras HACS integration. Install this add-on, then add the
+  integration — no separate Docker setup.
+url: "https://github.com/mirimalulkasif/ha-eufy/tree/main/eufy_cameras_bridge"
+arch:
+  - aarch64
+  - amd64
+init: false
+hassio_api: true
+discovery:
+  - eufy_sdk
+ingress: true
+ingress_port: 3000
+panel_icon: mdi:doorbell-video
+ports:
+  3000/tcp: 3000
+  8554/tcp: 8554
+ports_description:
+  3000/tcp: Bridge WS + HTTP (point Eufy Cameras integration here)
+  8554/tcp: go2rtc RTSP
+map:
+  - type: data
+    read_only: false
+options:
+  email: ""
+  password: ""
+  country: IL
+  poll_ms: 600000
+  stream_idle_ms: 300000
+  rtsp_idle_off_ms: 300000
+  prewarm: false
+  event_log: true
+  debug: false
+  go2rtc_enable: true
+schema:
+  email: str
+  password: password
+  country: str
+  poll_ms: int(0,)
+  stream_idle_ms: int(0,)
+  rtsp_idle_off_ms: int(0,)
+  stream_battery_budget_ms: "int(1,)?"
+  snapshot_live: "list(auto|on|off)?"
+  prewarm: bool
+  event_log: bool
+  debug: bool
+  go2rtc_enable: bool

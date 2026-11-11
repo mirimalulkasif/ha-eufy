@@ -1,0 +1,4 @@
+# https://developers.home-assistant.io/docs/add-ons/repository#repository-configuration
+name: Eufy Cameras add-ons
+url: "https://github.com/mirimalulkasif/ha-eufy"
+maintainer: mirimalulkasif

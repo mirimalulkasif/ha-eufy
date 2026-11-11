@@ -42,43 +42,71 @@ class EufyMegaClient:
         self._event_callbacks: list[EventCallback] = []
         self.devices: dict[str, dict[str, Any]] = {}
         self.auth_state: str | None = None
+        self.auth_extra: dict[str, Any] = {}
         self.bridge_id: str | None = None
         self.schema_version: int | None = None
+        self._hello = asyncio.Event()
         self._ready = asyncio.Event()
 
     def on_event(self, callback: EventCallback) -> None:
         self._event_callbacks.append(callback)
 
-    async def connect(self) -> None:
+    async def connect(self, *, require_auth_ok: bool = True) -> None:
+        """Open the bridge WebSocket.
+
+        When ``require_auth_ok`` is False, returns even if 2FA/captcha is pending
+        so the config flow can submit a code.
+        """
         url = f"ws://{self.host}:{self.port}{WS_PATH}"
         self._ws = await self.session.ws_connect(url, heartbeat=20)
         self._listen_task = asyncio.create_task(self._reader())
 
         try:
-            await asyncio.wait_for(self._ready.wait(), timeout=20)
+            await asyncio.wait_for(self._hello.wait(), timeout=20)
         except asyncio.TimeoutError:
-            # Some builds still answer commands before ready; probe auth.
+            # Still probe — some builds answer commands without a hello frame.
+            pass
+
+        if not self.auth_state:
             status = await self.command("auth.status")
             auth = status.get("auth") or {}
             self.auth_state = auth.get("state")
+            self.auth_extra = dict(auth)
             self.bridge_id = status.get("bridgeId") or self.bridge_id
-            if self.auth_state == "ok":
-                self._ready.set()
-            else:
-                raise EufyMegaError(
-                    f"Mega bridge auth state is {self.auth_state!r} — "
-                    "complete 2FA/captcha on the bridge first"
-                )
 
-        if self.auth_state and self.auth_state not in ("ok", None):
-            # ready may fire while reauth recovers; require ok for device cmds
-            if self.auth_state != "ok":
-                raise EufyMegaError(
-                    f"Mega bridge auth state is {self.auth_state!r} — "
-                    "complete 2FA/captcha on the bridge first"
-                )
+        if require_auth_ok and self.auth_state != "ok":
+            raise EufyMegaError(
+                f"Mega bridge auth state is {self.auth_state!r} — "
+                "complete 2FA/captcha first"
+            )
 
-        await self.refresh()
+        if self.auth_state == "ok":
+            await self.refresh()
+
+    async def auth_status(self) -> dict[str, Any]:
+        result = await self.command("auth.status")
+        auth = result.get("auth") or {}
+        self.auth_state = auth.get("state")
+        self.auth_extra = dict(auth)
+        self.bridge_id = result.get("bridgeId") or self.bridge_id
+        return auth
+
+    async def auth_submit(
+        self, *, code: str | None = None, captcha: str | None = None
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {}
+        if code is not None:
+            params["code"] = code
+        if captcha is not None:
+            params["captcha"] = captcha
+        result = await self.command("auth.submit", **params)
+        auth = result.get("auth") or {}
+        self.auth_state = auth.get("state")
+        self.auth_extra = dict(auth)
+        if self.auth_state == "ok":
+            self._ready.set()
+            await self.refresh()
+        return auth
 
     async def disconnect(self) -> None:
         if self._listen_task:
@@ -91,6 +119,7 @@ class EufyMegaClient:
         if self._ws and not self._ws.closed:
             await self._ws.close()
         self._ws = None
+        self._hello.clear()
         self._ready.clear()
 
     async def refresh(self) -> None:
@@ -246,7 +275,9 @@ class EufyMegaClient:
             return
 
         if event == "hello":
-            self.auth_state = (data.get("auth") or {}).get("state")
+            auth = data.get("auth") or {}
+            self.auth_state = auth.get("state")
+            self.auth_extra = dict(auth)
             self.bridge_id = data.get("bridgeId") or self.bridge_id
             self.schema_version = data.get("schemaVersion")
             _LOGGER.info(
@@ -255,13 +286,18 @@ class EufyMegaClient:
                 self.auth_state,
                 self.bridge_id,
             )
+            self._hello.set()
             if self.auth_state == "ok":
                 self._ready.set()
             return
 
         if event == "auth":
             self.auth_state = data.get("state")
+            self.auth_extra = {
+                k: v for k, v in data.items() if k != "event"
+            }
             _LOGGER.info("Mega bridge auth → %s", self.auth_state)
+            self._hello.set()
             if self.auth_state == "ok":
                 self._ready.set()
             return
@@ -269,6 +305,7 @@ class EufyMegaClient:
         if event == "ready":
             self.schema_version = data.get("schemaVersion") or self.schema_version
             _LOGGER.info("Mega bridge ready schema=%s", self.schema_version)
+            self._hello.set()
             self._ready.set()
             return
 
