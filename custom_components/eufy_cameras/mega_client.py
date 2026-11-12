@@ -194,24 +194,41 @@ class EufyMegaClient:
             path = f"/snapshot/{serial}"
             if attempt:
                 path = f"{path}?mode={attempt}"
-            url = urljoin(self.base_url + "/", path.lstrip("/"))
-            try:
-                async with self.session.get(
-                    url, timeout=aiohttp.ClientTimeout(total=25)
-                ) as resp:
-                    if resp.status != 200:
-                        _LOGGER.debug(
-                            "Snapshot %s mode=%r → HTTP %s",
-                            serial,
-                            attempt or "default",
-                            resp.status,
-                        )
-                        continue
-                    data = await resp.read()
-                    if data:
-                        return data
-            except (aiohttp.ClientError, TimeoutError) as err:
-                _LOGGER.debug("Snapshot %s error: %s", serial, err)
+            data = await self._http_jpeg(path)
+            if data:
+                return data
+            _LOGGER.debug(
+                "Snapshot %s mode=%r empty/failed",
+                serial,
+                attempt or "default",
+            )
+        return None
+
+    async def fetch_event_image(self, serial: str) -> bytes | None:
+        """GET /event-image/<sn> — last detection / push thumbnail."""
+        return await self._http_jpeg(f"/event-image/{serial}")
+
+    async def _http_jpeg(self, path: str) -> bytes | None:
+        url = urljoin(self.base_url + "/", path.lstrip("/"))
+        try:
+            async with self.session.get(
+                url, timeout=aiohttp.ClientTimeout(total=25)
+            ) as resp:
+                if resp.status != 200:
+                    _LOGGER.debug("GET %s → HTTP %s", path, resp.status)
+                    return None
+                data = await resp.read()
+                if data and (
+                    data.startswith(b"\xff\xd8")
+                    or "jpeg" in resp.headers.get("Content-Type", "").lower()
+                    or "image" in resp.headers.get("Content-Type", "").lower()
+                ):
+                    return data
+                if data:
+                    # Some bridges omit content-type; still accept non-empty bodies.
+                    return data
+        except (aiohttp.ClientError, TimeoutError) as err:
+            _LOGGER.debug("GET %s error: %s", path, err)
         return None
 
     async def command(self, cmd: str, **params: Any) -> dict[str, Any]:

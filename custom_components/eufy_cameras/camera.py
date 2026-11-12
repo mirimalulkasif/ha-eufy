@@ -28,8 +28,16 @@ async def async_setup_entry(
     coordinator = entry.runtime_data
     devices = list(coordinator.data)
     _LOGGER.info("Setting up %s camera entit(y/ies)", len(devices))
-    entities = [EufyCamera(coordinator, serial) for serial in devices]
-    async_add_entities(entities)
+    entities: list[EufyCamera] = []
+    for serial in devices:
+        try:
+            entities.append(EufyCamera(coordinator, serial))
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Failed to create camera entity for %s", serial)
+    if entities:
+        async_add_entities(entities)
+    else:
+        _LOGGER.warning("No camera entities were created")
 
 
 class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
@@ -44,23 +52,28 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
     def __init__(
         self, coordinator: EufyCamerasCoordinator, serial: str
     ) -> None:
+        # CoordinatorEntity does not call Entity/Camera __init__ — must init Camera.
         super().__init__(coordinator)
+        Camera.__init__(self)
         self.serial = serial
         self._attr_unique_id = f"eufy_cameras_{serial}_camera"
         self._last_image: bytes | None = None
-        self._unsub_event = None
         kind = (coordinator.data.get(serial) or {}).get("kind")
         # Doorbells (T82xx): stills only — live Mega feeds are often black.
         if kind == "doorbell":
             self._attr_supported_features = CameraEntityFeature(0)
+            self._attr_icon = "mdi:doorbell-video"
             self._stills_only = True
         else:
             self._attr_supported_features = CameraEntityFeature.STREAM
+            self._attr_icon = "mdi:cctv"
             self._stills_only = False
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         self.coordinator.client.on_event(self._handle_event)
+        # Warm the first still so the entity is not stuck on "Idle / no image".
+        self.hass.async_create_task(self._prefetch_still())
 
     @property
     def device_data(self) -> dict[str, Any]:
@@ -122,8 +135,20 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
                 return data
 
         try:
+            data = await client.fetch_event_image(self.serial)
+            if data:
+                self._last_image = data
+                return data
+        except EufyMegaError as err:
+            _LOGGER.debug("event-image failed for %s: %s", self.serial, err)
+
+        try:
             await client.command("event.refresh", sn=self.serial)
             data = await client.fetch_snapshot(self.serial, mode="stored")
+            if data:
+                self._last_image = data
+                return data
+            data = await client.fetch_event_image(self.serial)
             if data:
                 self._last_image = data
                 return data
