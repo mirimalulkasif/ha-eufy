@@ -26,36 +26,41 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator = entry.runtime_data
-    async_add_entities(
-        EufyCamera(coordinator, serial) for serial in coordinator.data
-    )
+    devices = list(coordinator.data)
+    _LOGGER.info("Setting up %s camera entit(y/ies)", len(devices))
+    entities = [EufyCamera(coordinator, serial) for serial in devices]
+    async_add_entities(entities)
 
 
 class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
     """Indoor: live RTSP via go2rtc. Doorbell: push/stored stills (no broken live)."""
 
     _attr_has_entity_name = True
-    _attr_name = None
+    # Explicit name so the device page shows a row labeled "Camera"
+    # (name=None makes the entity inherit only the device name and is easy to miss).
+    _attr_name = "Camera"
+    _attr_entity_registry_enabled_default = True
 
     def __init__(
         self, coordinator: EufyCamerasCoordinator, serial: str
     ) -> None:
         super().__init__(coordinator)
-        Camera.__init__(self)
         self.serial = serial
         self._attr_unique_id = f"eufy_cameras_{serial}_camera"
         self._last_image: bytes | None = None
+        self._unsub_event = None
         kind = (coordinator.data.get(serial) or {}).get("kind")
-        # Doorbells (T82xx) often cannot open a usable live WebRTC/P2P feed in this
-        # stack — same as homebridge-eufy-cameras "picture stream" mode. Advertise
-        # stills only so HA does not open a black RTSP window.
+        # Doorbells (T82xx): stills only — live Mega feeds are often black.
         if kind == "doorbell":
             self._attr_supported_features = CameraEntityFeature(0)
             self._stills_only = True
         else:
             self._attr_supported_features = CameraEntityFeature.STREAM
             self._stills_only = False
-        coordinator.client.on_event(self._handle_event)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.coordinator.client.on_event(self._handle_event)
 
     @property
     def device_data(self) -> dict[str, Any]:
@@ -101,20 +106,21 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
     ) -> bytes | None:
         """Fetch a JPEG still from the Mega bridge."""
         client = self.coordinator.client
-        # Prefer retained / event stills first (doorbell-friendly), then auto/live.
         for mode in ("stored", "", "live"):
             try:
                 data = await client.fetch_snapshot(self.serial, mode=mode)
             except EufyMegaError as err:
                 _LOGGER.debug(
-                    "Snapshot %s mode=%r failed: %s", self.serial, mode or "auto", err
+                    "Snapshot %s mode=%r failed: %s",
+                    self.serial,
+                    mode or "auto",
+                    err,
                 )
                 continue
             if data:
                 self._last_image = data
                 return data
 
-        # Ask the bridge to pull the newest event cover, then retry stored.
         try:
             await client.command("event.refresh", sn=self.serial)
             data = await client.fetch_snapshot(self.serial, mode="stored")
@@ -122,7 +128,9 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
                 self._last_image = data
                 return data
         except EufyMegaError as err:
-            _LOGGER.debug("event.refresh/snapshot failed for %s: %s", self.serial, err)
+            _LOGGER.debug(
+                "event.refresh/snapshot failed for %s: %s", self.serial, err
+            )
 
         return self._last_image
 
@@ -152,10 +160,9 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
             return url
         host = self.coordinator.client.host
         if not host or host in ("127.0.0.1", "localhost"):
-            # HA Core container cannot use the bridge's loopback; keep as-is and log.
             _LOGGER.debug(
                 "Stream URL uses loopback and bridge host is also loopback (%s) — "
-                "if the picture is black, set the integration host to the HA/VM LAN IP",
+                "if live view is black, set the integration host to the VM LAN IP",
                 host,
             )
             return url
@@ -165,7 +172,9 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
 
     @callback
     def _handle_event(self, event: dict) -> None:
-        """Invalidate / refresh stills when motion or ring push arrives."""
+        """Refresh stills when motion or ring push arrives."""
+        if self.hass is None:
+            return
         serial = (
             event.get("serialNumber")
             or event.get("deviceSn")
@@ -173,16 +182,13 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
         )
         if serial != self.serial:
             return
-        name = str(
-            event.get("eventName") or event.get("event") or ""
-        ).lower()
+        name = str(event.get("eventName") or event.get("event") or "").lower()
         if name in (
             "motion",
             "persondetected",
             "doorbellpress",
             "eventimageupdated",
         ) or "motion" in name or "doorbell" in name:
-            # Clear cache so the next card fetch pulls a fresh stored still.
             self._last_image = None
             self.hass.async_create_task(self._prefetch_still())
 
