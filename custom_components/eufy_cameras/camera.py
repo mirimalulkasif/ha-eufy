@@ -119,6 +119,10 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
     ) -> bytes | None:
         """Fetch a JPEG still from the Mega bridge."""
         client = self.coordinator.client
+        # Re-probe media host if earlier snapshots never worked.
+        if self._last_image is None:
+            await client.resolve_media_host()
+
         for mode in ("stored", "", "live"):
             try:
                 data = await client.fetch_snapshot(self.serial, mode=mode)
@@ -157,6 +161,14 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
                 "event.refresh/snapshot failed for %s: %s", self.serial, err
             )
 
+        if self._last_image is None:
+            _LOGGER.warning(
+                "No still for %s from %s — trigger motion/ring once, or set the "
+                "integration host to the VM LAN IP (not 127.0.0.1) so HA can reach "
+                "bridge snapshots",
+                self.serial,
+                client.base_url,
+            )
         return self._last_image
 
     async def stream_source(self) -> str | None:
@@ -179,17 +191,12 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
         return None
 
     def _rewrite_loopback_host(self, url: str) -> str:
-        """Point RTSP at the configured bridge host, not the bridge's 127.0.0.1."""
+        """Point RTSP at a host HA Core can reach, not the bridge's 127.0.0.1."""
         parsed = urlparse(url)
         if parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
             return url
-        host = self.coordinator.client.host
-        if not host or host in ("127.0.0.1", "localhost"):
-            _LOGGER.debug(
-                "Stream URL uses loopback and bridge host is also loopback (%s) — "
-                "if live view is black, set the integration host to the VM LAN IP",
-                host,
-            )
+        host = self.coordinator.client.media_host or self.coordinator.client.host
+        if not host:
             return url
         port = parsed.port
         netloc = f"{host}:{port}" if port else host

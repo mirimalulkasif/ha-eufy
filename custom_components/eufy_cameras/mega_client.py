@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urljoin
@@ -16,6 +17,9 @@ from .device_kinds import classify_device
 _LOGGER = logging.getLogger(__name__)
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
+
+# Properties that Mega often cannot write over the doorbell RTC control channel.
+RTC_UNWRITABLE = frozenset({"statusLed", "enabled", "privacy", "nightVision"})
 
 
 class EufyMegaError(Exception):
@@ -34,6 +38,8 @@ class EufyMegaClient:
         self.host = host
         self.port = port
         self.session = session
+        # media_host may differ from WS host on HA OS (Core cannot use host loopback).
+        self.media_host = host
         self.base_url = f"http://{host}:{port}"
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._futures: dict[int, asyncio.Future[dict[str, Any]]] = {}
@@ -81,7 +87,81 @@ class EufyMegaClient:
             )
 
         if self.auth_state == "ok":
+            await self.resolve_media_host()
             await self.refresh()
+
+    async def resolve_media_host(self) -> None:
+        """Pick an HTTP host HA Core can reach for /snapshot and RTSP.
+
+        On Home Assistant OS, Core runs in a container: ``127.0.0.1`` is Core itself,
+        not the host where a ``--network host`` bridge listens. Prefer the Supervisor
+        Docker gateway when loopback HTTP fails.
+        """
+        candidates: list[str] = [self.host]
+        if self.host in ("127.0.0.1", "localhost", "::1"):
+            gateway = await self._supervisor_gateway()
+            if gateway:
+                candidates.append(gateway)
+            # Common HA OS host-gateway aliases
+            for extra in ("172.30.32.1", "homeassistant.local"):
+                if extra not in candidates:
+                    candidates.append(extra)
+
+        for candidate in candidates:
+            if await self._healthz_ok(candidate):
+                if candidate != self.media_host:
+                    _LOGGER.info(
+                        "Using %s:%s for snapshots/streams (WS host was %s)",
+                        candidate,
+                        self.port,
+                        self.host,
+                    )
+                self.media_host = candidate
+                self.base_url = f"http://{candidate}:{self.port}"
+                return
+
+        _LOGGER.warning(
+            "Could not reach bridge /healthz for snapshots via %s — "
+            "camera tiles may stay empty. Reconfigure the integration host to the "
+            "VM LAN IP (not 127.0.0.1)",
+            candidates,
+        )
+
+    async def _supervisor_gateway(self) -> str | None:
+        token = os.environ.get("SUPERVISOR_TOKEN")
+        if not token:
+            return None
+        try:
+            async with self.session.get(
+                "http://supervisor/network/info",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                payload = await resp.json(content_type=None)
+                data = payload.get("data") if isinstance(payload, dict) else None
+                if not isinstance(data, dict):
+                    return None
+                docker = data.get("docker") or {}
+                gateway = docker.get("gateway")
+                return str(gateway) if gateway else None
+        except (aiohttp.ClientError, TimeoutError, ValueError) as err:
+            _LOGGER.debug("Supervisor network info failed: %s", err)
+            return None
+
+    async def _healthz_ok(self, host: str) -> bool:
+        url = f"http://{host}:{self.port}/healthz"
+        try:
+            async with self.session.get(
+                url, timeout=aiohttp.ClientTimeout(total=5)
+            ) as resp:
+                if resp.status != 200:
+                    return False
+                body = await resp.json(content_type=None)
+                return bool(isinstance(body, dict) and body.get("ok", True))
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            return False
 
     async def auth_status(self) -> dict[str, Any]:
         result = await self.command("auth.status")
@@ -162,7 +242,16 @@ class EufyMegaClient:
         )
 
     async def set_property(self, serial: str, name: str, value: Any) -> None:
-        await self.command("device.set", sn=serial, name=name, value=value)
+        try:
+            await self.command("device.set", sn=serial, name=name, value=value)
+        except EufyMegaError as err:
+            msg = str(err)
+            if "not routable" in msg or "set-param" in msg or "RTC" in msg:
+                raise EufyMegaError(
+                    f"{name} cannot be changed on this device over Mega RTC "
+                    f"(doorbell/cloud path). Use the Eufy app for LED/privacy."
+                ) from err
+            raise
 
     async def set_enabled(self, serial: str, enabled: bool) -> None:
         """Best-effort enable/privacy toggle used by the Enabled switch."""
@@ -176,6 +265,25 @@ class EufyMegaClient:
             return
         # Fall back to enabled even if not in the last snapshot (may still work).
         await self.set_property(serial, "enabled", enabled)
+
+    def writable_switches(self, serial: str) -> list[str]:
+        """Bool properties safe to expose as switches for this device."""
+        data = self.devices.get(serial) or {}
+        kind = data.get("kind")
+        props = data.get("properties") or {}
+        keys: list[str] = []
+        # Doorbell RTC channel rejects statusLed/enabled-style set-param writes.
+        if kind == "doorbell":
+            if "light" in props:
+                keys.append("light")
+            return keys
+        if "enabled" in props or "privacy" in props:
+            keys.append("enabled")
+        if "statusLed" in props:
+            keys.append("statusLed")
+        if "light" in props:
+            keys.append("light")
+        return keys
 
     async def stream_urls(self, serial: str) -> dict[str, Any]:
         return await self.command("stream.start", sn=serial)

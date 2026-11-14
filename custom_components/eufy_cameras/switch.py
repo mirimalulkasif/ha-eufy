@@ -6,26 +6,18 @@ from typing import Any
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import EufyConfigEntry
 from .entity import EufyCameraEntity
 from .mega_client import EufyMegaError
 
-ENABLED_DESC = SwitchEntityDescription(
-    key="enabled",
-    name="Enabled",
-)
-
-STATUS_LED_DESC = SwitchEntityDescription(
-    key="statusLed",
-    name="Status LED",
-)
-
-LIGHT_DESC = SwitchEntityDescription(
-    key="light",
-    name="Light",
-)
+SWITCH_DESCRIPTIONS: dict[str, SwitchEntityDescription] = {
+    "enabled": SwitchEntityDescription(key="enabled", name="Enabled"),
+    "statusLed": SwitchEntityDescription(key="statusLed", name="Status LED"),
+    "light": SwitchEntityDescription(key="light", name="Light"),
+}
 
 
 async def async_setup_entry(
@@ -35,14 +27,11 @@ async def async_setup_entry(
 ) -> None:
     coordinator = entry.runtime_data
     entities: list[SwitchEntity] = []
-    for serial, data in coordinator.data.items():
-        props = data.get("properties") or {}
-        # Always expose Enabled — Mega may map via privacy / enabled.
-        entities.append(EufyBoolSwitch(coordinator, serial, ENABLED_DESC))
-        if "statusLed" in props:
-            entities.append(EufyBoolSwitch(coordinator, serial, STATUS_LED_DESC))
-        if "light" in props:
-            entities.append(EufyBoolSwitch(coordinator, serial, LIGHT_DESC))
+    for serial in coordinator.data:
+        for key in coordinator.client.writable_switches(serial):
+            desc = SWITCH_DESCRIPTIONS.get(key)
+            if desc:
+                entities.append(EufyBoolSwitch(coordinator, serial, desc))
     async_add_entities(entities)
 
 
@@ -84,8 +73,8 @@ class EufyBoolSwitch(EufyCameraEntity, SwitchEntity):
                 await self.coordinator.client.set_enabled(self.serial, value)
             else:
                 await self.coordinator.client.set_property(self.serial, key, value)
-        except EufyMegaError:
-            raise
+        except EufyMegaError as err:
+            raise HomeAssistantError(str(err)) from err
         props = self.device_data.setdefault("properties", {})
         if key == "enabled":
             if "privacy" in props and "enabled" not in props:
