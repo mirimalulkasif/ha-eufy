@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse, urlunparse
 
 from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.core import HomeAssistant, callback
@@ -45,11 +44,15 @@ async def async_setup_entry(
 
 
 class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
-    """Live RTSP via bridge go2rtc for doorbell + indoor.
+    """Live video via Mega bridge for doorbell + indoor.
 
-    Doorbell/battery cameras skip HA's HLS stream worker (which retries forever
-    and caused Idle↔Streaming flaps). The UI then uses go2rtc WebRTC against the
-    same RTSP URL — same pattern as the official mega-yfue HA integration.
+    Home Assistant's go2rtc registers the stream under the *entity id*
+    (e.g. ``camera.doorbell``) but the *producer* must be a real URL. We feed
+    HA go2rtc the bridge's raw ``/stream/<serial>`` Annex-B HTTP URL (same
+    source the bridge's own go2rtc uses), not ``rtsp://…/camera.doorbell``.
+
+    Doorbell/battery cameras skip HA's HLS worker (``async_create_stream`` →
+    ``None``) so a dropped Mega session does not Idle↔Streaming-loop.
     """
 
     _attr_has_entity_name = True
@@ -76,9 +79,9 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
         self.hass.async_create_task(self._prefetch_still())
         if skip_ha_hls_worker(self.device_data):
             _LOGGER.info(
-                "%s: using go2rtc WebRTC (not HA HLS) so a dropped Mega feed "
-                "does not Idle↔Streaming-loop. Turn OFF 'Preload stream' on this "
-                "entity if it is still flapping.",
+                "%s (%s): WebRTC via HA go2rtc → bridge /stream (HLS worker off). "
+                "Disable 'Preload stream' on this entity.",
+                self.name,
                 self.serial,
             )
 
@@ -108,43 +111,57 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
         data = self.device_data
         client = self.coordinator.client
         host = client.media_host or client.host
+        port = client.port
         return {
             ATTR_SERIAL: self.serial,
             ATTR_KIND: data.get("kind"),
             ATTR_MODEL: data.get("model"),
             "power": data.get("power"),
             "capabilities": data.get("capabilities"),
-            "stream_mode": "webrtc_rtsp",
+            "stream_mode": "webrtc_ffmpeg_http",
+            "bridge_stream": f"http://{host}:{port}/stream/{self.serial}",
             "rtsp_url": f"rtsp://{host}:8554/{self.serial}",
             "go2rtc_stream": f"http://{host}:1984/stream.html?src={self.serial}",
             "skip_ha_hls": skip_ha_hls_worker(data),
         }
 
     async def stream_source(self) -> str | None:
-        """Return go2rtc RTSP URL for doorbell and indoor."""
+        """Producer URL for HA's go2rtc (registered under this entity_id).
+
+        Use ffmpeg→bridge HTTP Annex-B, not bridge RTSP. That avoids a 404 when
+        HA go2rtc falls back to ``ffmpeg:camera.<name>`` after a bad RTSP hop,
+        and matches how the bridge itself sources cameras.
+        """
+        client = self.coordinator.client
+        await client.resolve_media_host()
+        host = client.media_host or client.host
+        port = client.port
+        if host in ("127.0.0.1", "localhost", "::1"):
+            _LOGGER.error(
+                "Stream host is loopback (%s) — HA Core cannot reach the bridge. "
+                "Set the integration host to the VM LAN IP.",
+                host,
+            )
+
+        # Arm the bridge session (no-op if already streaming).
         try:
-            result = await self.coordinator.client.stream_urls(self.serial)
+            await client.stream_urls(self.serial)
         except EufyMegaError as err:
-            _LOGGER.warning("stream.start failed for %s: %s", self.serial, err)
-            # Still advertise the conventional go2rtc path — connecting starts the cam.
-            host = (
-                self.coordinator.client.media_host
-                or self.coordinator.client.host
-            )
-            return f"rtsp://{host}:8554/{self.serial}"
-        rtsp = result.get("rtsp")
-        if rtsp:
-            return self._rewrite_loopback_host(str(rtsp))
-        path = result.get("path") or self.device_data.get("stream_path")
-        if path:
-            host = (
-                self.coordinator.client.media_host
-                or self.coordinator.client.host
-            )
-            port = self.coordinator.client.port
-            return f"http://{host}:{port}{path}"
-        host = self.coordinator.client.media_host or self.coordinator.client.host
-        return f"rtsp://{host}:8554/{self.serial}"
+            _LOGGER.debug("stream.start for %s: %s (continuing with HTTP path)", self.serial, err)
+
+        path = self.device_data.get("stream_path") or f"/stream/{self.serial}"
+        if not path.startswith("/"):
+            path = f"/{path}"
+        # #async = wall-clock DTS (HA aborts on eufy's dts jumps). #video=copy = remux only.
+        source = (
+            f"ffmpeg:http://{host}:{port}{path}#video=copy#async"
+        )
+        model = str(self.device_data.get("model") or "").upper()
+        # Indoor T84xx raw H.264 is mis-probed without an explicit demuxer (bridge does the same).
+        if model.startswith("T84"):
+            source += "#raw=-f h264 -analyzeduration 0 -probesize 32768"
+        _LOGGER.info("stream_source %s → %s", self.entity_id, source)
+        return source
 
     async def async_create_stream(self) -> Stream | None:
         """Skip HA HLS worker for doorbell / battery (prevents reconnect spam)."""
@@ -199,15 +216,6 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
             )
 
         return self._last_image
-
-    def _rewrite_loopback_host(self, url: str) -> str:
-        parsed = urlparse(url)
-        host = self.coordinator.client.media_host or self.coordinator.client.host
-        if parsed.hostname in ("127.0.0.1", "localhost", "::1") and host:
-            port = parsed.port
-            netloc = f"{host}:{port}" if port else host
-            return urlunparse(parsed._replace(netloc=netloc))
-        return url
 
     @callback
     def _handle_event(self, event: dict) -> None:

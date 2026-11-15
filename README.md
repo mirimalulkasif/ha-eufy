@@ -85,9 +85,9 @@ services:
 
 Doorbell **and** indoor cameras use live RTSP via the Mega bridge + go2rtc.
 
-**Doorbell Idle↔Streaming flap:** that was Home Assistant’s **HLS stream worker** retrying a feed that drops. v2.3.0 skips that worker for doorbells (same fix as the official Mega HA integration) so the UI uses **go2rtc WebRTC** instead.
+**Doorbell WebRTC:** HA registers the stream as `camera.doorbell` but must pull video from the bridge serial URL. v2.3.1 points HA’s go2rtc at `ffmpeg:http://<LAN-IP>:3000/stream/<SERIAL>` (same source the bridge uses), so you no longer get `DESCRIBE …/camera.doorbell` **404**.
 
-**Also turn OFF** on the doorbell entity: ⚙ → **Preload stream** (Settings → Entities → Doorbell Camera). Preload forces permanent reconnects and drains battery / flaps state.
+**Also turn OFF** on the doorbell entity: ⚙ → **Preload stream**. Preload forces permanent reconnects and drains battery / flaps Idle↔Streaming.
 
 **Important on HA OS:** integration **host** = VM **LAN IP**, not `127.0.0.1`.
 
