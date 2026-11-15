@@ -3,7 +3,15 @@
     "step": {
       "user": {
         "title": "Eufy Cameras",
-        "description": "Install and start the **Eufy Cameras Bridge** add-on from this repository first (Settings → Add-ons). Then enter the bridge host/port. On HA OS / Supervised use your Home Assistant host IP and port 3000 — not 127.0.0.1.",
+        "description": "Point at the Mega bridge. On HA OS use the VM LAN IP and port 3000 — not 127.0.0.1.",
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Eufy Cameras",
+        "description": "Change the Mega bridge host/port. Use the Home Assistant VM LAN IP (not 127.0.0.1) so camera snapshots work.",
         "data": {
           "host": "Host",
           "port": "Port"
@@ -29,13 +37,30 @@
       }
     },
     "error": {
-      "cannot_connect": "Could not reach the Mega bridge. Install/start the Eufy Cameras Bridge add-on, check host/port, and wait until it is running.",
-      "invalid_auth": "Code rejected. Try again, or restart the bridge add-on to request a fresh challenge.",
+      "cannot_connect": "Could not reach the Mega bridge. Check host/port and that the bridge is running with auth ok.",
+      "invalid_auth": "Code rejected. Try again, or request a fresh challenge.",
       "unknown": "Unexpected error."
     },
     "abort": {
       "already_configured": "This Mega bridge is already configured.",
+      "reconfigure_successful": "Bridge host/port updated.",
       "unknown": "Unexpected discovery payload."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Eufy Cameras bridge",
+        "description": "Use the Home Assistant VM LAN IP (not 127.0.0.1) so snapshots and RTSP work from HA Core.",
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the Mega bridge at that host/port.",
+      "unknown": "Unexpected error."
     }
   }
 }

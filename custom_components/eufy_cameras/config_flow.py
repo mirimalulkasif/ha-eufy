@@ -9,18 +9,24 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PORT
+from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import DEFAULT_HOST, DEFAULT_PORT, DOMAIN
 from .mega_client import EufyMegaClient, EufyMegaError
 
-STEP_USER_DATA_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_HOST, default=DEFAULT_HOST): str,
-        vol.Required(CONF_PORT, default=DEFAULT_PORT): int,
-    }
-)
+
+def _host_port_schema(host: str, port: int) -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Required(CONF_HOST, default=host): str,
+            vol.Required(CONF_PORT, default=port): int,
+        }
+    )
+
+
+STEP_USER_DATA_SCHEMA = _host_port_schema(DEFAULT_HOST, DEFAULT_PORT)
 
 
 class EufyCamerasConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -35,10 +41,18 @@ class EufyCamerasConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._bridge_id: str | None = None
         self._captcha_image: str | None = None
 
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> EufyCamerasOptionsFlow:
+        """Return the options flow (Configure button)."""
+        return EufyCamerasOptionsFlow(config_entry)
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Manual host/port — used after the add-on is running."""
+        """Manual host/port — used after the bridge is running."""
         errors: dict[str, str] = {}
         if user_input is not None:
             self._host = str(user_input[CONF_HOST]).strip()
@@ -54,13 +68,49 @@ class EufyCamerasConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=STEP_USER_DATA_SCHEMA,
             errors=errors,
-            description_placeholders={
-                "hint": (
-                    "Install & start the Eufy Cameras Bridge add-on from this "
-                    "same repository first. On Supervised/HA OS use your HA "
-                    "host IP (not 127.0.0.1) and port 3000."
-                ),
-            },
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Change host/port from the integration ⋮ → Reconfigure menu."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        current_host = str(entry.data.get(CONF_HOST, DEFAULT_HOST))
+        current_port = int(entry.data.get(CONF_PORT, DEFAULT_PORT))
+
+        if user_input is not None:
+            self._host = str(user_input[CONF_HOST]).strip()
+            self._port = int(user_input[CONF_PORT])
+            session = async_get_clientsession(self.hass)
+            client = EufyMegaClient(
+                host=self._host, port=self._port, session=session
+            )
+            try:
+                await client.connect(require_auth_ok=True)
+            except (EufyMegaError, aiohttp.ClientError, OSError, TimeoutError):
+                errors["base"] = "cannot_connect"
+            except Exception:  # noqa: BLE001
+                errors["base"] = "unknown"
+            else:
+                await client.disconnect()
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates={
+                        CONF_HOST: self._host,
+                        CONF_PORT: self._port,
+                    },
+                )
+            finally:
+                if not errors:
+                    pass
+                else:
+                    await client.disconnect()
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=_host_port_schema(current_host, current_port),
+            errors=errors,
         )
 
     async def async_step_hassio(self, discovery_info: Any) -> FlowResult:
@@ -206,6 +256,49 @@ class EufyCamerasConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_create_entry(
             title=title,
             data={CONF_HOST: self._host, CONF_PORT: self._port},
+        )
+
+
+class EufyCamerasOptionsFlow(config_entries.OptionsFlow):
+    """Configure button — change bridge host/port without deleting the entry."""
+
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        self._config_entry = config_entry
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        errors: dict[str, str] = {}
+        current_host = str(self._config_entry.data.get(CONF_HOST, DEFAULT_HOST))
+        current_port = int(self._config_entry.data.get(CONF_PORT, DEFAULT_PORT))
+
+        if user_input is not None:
+            host = str(user_input[CONF_HOST]).strip()
+            port = int(user_input[CONF_PORT])
+            session = async_get_clientsession(self.hass)
+            client = EufyMegaClient(host=host, port=port, session=session)
+            try:
+                await client.connect(require_auth_ok=True)
+            except (EufyMegaError, aiohttp.ClientError, OSError, TimeoutError):
+                errors["base"] = "cannot_connect"
+            except Exception:  # noqa: BLE001
+                errors["base"] = "unknown"
+            else:
+                await client.disconnect()
+                self.hass.config_entries.async_update_entry(
+                    self._config_entry,
+                    data={CONF_HOST: host, CONF_PORT: port},
+                )
+                await self.hass.config_entries.async_reload(
+                    self._config_entry.entry_id
+                )
+                return self.async_create_entry(title="", data={})
+            await client.disconnect()
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=_host_port_schema(current_host, current_port),
+            errors=errors,
         )
 
 
