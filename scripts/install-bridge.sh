@@ -50,11 +50,21 @@ if [ -z "${EUFY_COUNTRY:-}" ]; then
   ask "Eufy country code" EUFY_COUNTRY "IL"
 fi
 
+# Keep existing password/email if re-running over an env file that already exists
+# and the user pasted empty — ask() already required values above.
+
 umask 077
 cat > "$DATA_DIR/bridge.env" <<EOF
 EUFY_EMAIL=$EUFY_EMAIL
 EUFY_PASSWORD=$EUFY_PASSWORD
 EUFY_COUNTRY=$EUFY_COUNTRY
+BRIDGE_HOST=0.0.0.0
+BRIDGE_PORT=3000
+# Faster first view after ring/person (opens P2P early). Uses a bit more battery.
+BRIDGE_PREWARM=1
+# Keep a watched battery/doorbell stream up longer (ms) before Mega sleeps it.
+STREAM_BATTERY_BUDGET_MS=180000
+STREAM_IDLE_MS=600000
 EOF
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
@@ -73,4 +83,6 @@ sleep 3
 curl -s "http://127.0.0.1:3000/healthz" || true
 echo
 echo "Logs: docker logs -f $NAME"
-echo "Next: HACS install https://github.com/mirimalulkasif/ha-eufy → Add integration → 127.0.0.1:3000"
+echo "In HA, set Eufy Cameras host to the VM LAN IP, port 3000."
+echo "For lower latency than HA's built-in player, open:"
+echo "  http://<VM-LAN-IP>:1984/stream.html?src=<CAMERA_SERIAL>"

@@ -83,9 +83,17 @@ services:
 | Doorbell | T82xx (e.g. T8224) | Camera (**stills** from push/event thumbnails — no live WebRTC), motion, person, ring, switches, battery, model |
 | Indoor | T84xx (e.g. T8400) | Camera (live RTSP via go2rtc), motion, person, switches, battery, model, power |
 
-Doorbell live video on Mega often opens a black window (same limitation as the Homebridge plugin). The integration shows the latest motion/ring still instead. Trigger the doorbell or walk in front of it once if the tile is empty, then refresh the card.
+Both doorbell and indoor cameras use **live RTSP** through the Mega bridge + go2rtc.
 
-**Important on HA OS:** set the integration **host** to the VM’s **LAN IP**, not `127.0.0.1`. Home Assistant Core runs in a container, so loopback cannot reach a host-network bridge for snapshots/RTSP. Status LED / enabled toggles are not available on many Mega doorbells (RTC rejects those writes) — use the Eufy app for LED/privacy.
+**Important on HA OS:** set the integration **host** to the VM’s **LAN IP**, not `127.0.0.1`.
+
+**Speed:** HA’s built-in camera player is HLS and feels slow (often several seconds). For a snappier view open the bridge go2rtc page `http://<VM-LAN-IP>:1984/stream.html?src=<SERIAL>` (WebRTC/MSE), or use a WebRTC/go2rtc lovelace card with the `rtsp_url` attribute. Recreate the bridge with prewarm:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mirimalulkasif/ha-eufy/main/scripts/tune-bridge-latency.sh | sh
+```
+
+Status LED / enabled toggles are not available on many Mega doorbells (RTC rejects those writes) — use the Eufy app for LED/privacy.
 
 ## Requirements
 
