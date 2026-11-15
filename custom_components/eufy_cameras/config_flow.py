@@ -13,13 +13,7 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import (
-    CONF_DOORBELL_LIVE,
-    DEFAULT_DOORBELL_LIVE,
-    DEFAULT_HOST,
-    DEFAULT_PORT,
-    DOMAIN,
-)
+from .const import DEFAULT_HOST, DEFAULT_PORT, DOMAIN
 from .mega_client import EufyMegaClient, EufyMegaError
 
 
@@ -28,16 +22,6 @@ def _host_port_schema(host: str, port: int) -> vol.Schema:
         {
             vol.Required(CONF_HOST, default=host): str,
             vol.Required(CONF_PORT, default=port): int,
-        }
-    )
-
-
-def _options_schema(host: str, port: int, doorbell_live: bool) -> vol.Schema:
-    return vol.Schema(
-        {
-            vol.Required(CONF_HOST, default=host): str,
-            vol.Required(CONF_PORT, default=port): int,
-            vol.Required(CONF_DOORBELL_LIVE, default=doorbell_live): bool,
         }
     )
 
@@ -276,7 +260,7 @@ class EufyCamerasConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class EufyCamerasOptionsFlow(config_entries.OptionsFlow):
-    """Configure button — host/port + doorbell live toggle."""
+    """Configure button — change bridge host/port."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self._config_entry = config_entry
@@ -287,16 +271,10 @@ class EufyCamerasOptionsFlow(config_entries.OptionsFlow):
         errors: dict[str, str] = {}
         current_host = str(self._config_entry.data.get(CONF_HOST, DEFAULT_HOST))
         current_port = int(self._config_entry.data.get(CONF_PORT, DEFAULT_PORT))
-        current_live = bool(
-            self._config_entry.options.get(
-                CONF_DOORBELL_LIVE, DEFAULT_DOORBELL_LIVE
-            )
-        )
 
         if user_input is not None:
             host = str(user_input[CONF_HOST]).strip()
             port = int(user_input[CONF_PORT])
-            doorbell_live = bool(user_input.get(CONF_DOORBELL_LIVE, False))
             session = async_get_clientsession(self.hass)
             client = EufyMegaClient(host=host, port=port, session=session)
             try:
@@ -310,7 +288,6 @@ class EufyCamerasOptionsFlow(config_entries.OptionsFlow):
                 self.hass.config_entries.async_update_entry(
                     self._config_entry,
                     data={CONF_HOST: host, CONF_PORT: port},
-                    options={CONF_DOORBELL_LIVE: doorbell_live},
                 )
                 await self.hass.config_entries.async_reload(
                     self._config_entry.entry_id
@@ -320,9 +297,7 @@ class EufyCamerasOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="init",
-            data_schema=_options_schema(
-                current_host, current_port, current_live
-            ),
+            data_schema=_host_port_schema(current_host, current_port),
             errors=errors,
         )
 

@@ -83,17 +83,21 @@ services:
 | Doorbell | T82xx (e.g. T8224) | Camera (**stills** from push/event thumbnails — no live WebRTC), motion, person, ring, switches, battery, model |
 | Indoor | T84xx (e.g. T8400) | Camera (live RTSP via go2rtc), motion, person, switches, battery, model, power |
 
-**Indoor** cameras use live RTSP. **Doorbells** default to **stills** (latest ring/motion image): Mega doorbell live video often opens and dies within a second, which flaps HA between Streaming and Idle. You can force doorbell live under **Configure → Try live stream for doorbell** (experimental).
+Doorbell **and** indoor cameras use live RTSP via the Mega bridge + go2rtc.
 
-**Important on HA OS:** set the integration **host** to the VM’s **LAN IP**, not `127.0.0.1`.
+**Doorbell Idle↔Streaming flap:** that was Home Assistant’s **HLS stream worker** retrying a feed that drops. v2.3.0 skips that worker for doorbells (same fix as the official Mega HA integration) so the UI uses **go2rtc WebRTC** instead.
 
-**Speed:** HA’s built-in camera player is HLS and feels slow (often several seconds). For a snappier view open the bridge go2rtc page `http://<VM-LAN-IP>:1984/stream.html?src=<SERIAL>` (WebRTC/MSE), or use a WebRTC/go2rtc lovelace card with the `rtsp_url` attribute. Recreate the bridge with prewarm:
+**Also turn OFF** on the doorbell entity: ⚙ → **Preload stream** (Settings → Entities → Doorbell Camera). Preload forces permanent reconnects and drains battery / flaps state.
+
+**Important on HA OS:** integration **host** = VM **LAN IP**, not `127.0.0.1`.
+
+**Faster view:** `http://<VM-LAN-IP>:1984/stream.html?src=<SERIAL>` or recreate the bridge with prewarm:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mirimalulkasif/ha-eufy/main/scripts/tune-bridge-latency.sh | sh
 ```
 
-Status LED / enabled toggles are not available on many Mega doorbells (RTC rejects those writes) — use the Eufy app for LED/privacy.
+Status LED / enabled toggles are not available on many Mega doorbells — use the Eufy app.
 
 ## Requirements
 

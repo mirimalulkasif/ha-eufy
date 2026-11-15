@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse, urlunparse
 
 from homeassistant.components.camera import Camera, CameraEntityFeature
@@ -13,16 +13,13 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import EufyConfigEntry
-from .const import (
-    ATTR_KIND,
-    ATTR_MODEL,
-    ATTR_SERIAL,
-    CONF_DOORBELL_LIVE,
-    DEFAULT_DOORBELL_LIVE,
-    DOMAIN,
-)
+from .const import ATTR_KIND, ATTR_MODEL, ATTR_SERIAL, DOMAIN
 from .coordinator import EufyCamerasCoordinator
 from .mega_client import EufyMegaError
+from .power import skip_ha_hls_worker
+
+if TYPE_CHECKING:
+    from homeassistant.components.stream import Stream
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,21 +30,12 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator = entry.runtime_data
-    doorbell_live = bool(
-        entry.options.get(CONF_DOORBELL_LIVE, DEFAULT_DOORBELL_LIVE)
-    )
     devices = list(coordinator.data)
-    _LOGGER.info(
-        "Setting up %s camera entit(y/ies) (doorbell_live=%s)",
-        len(devices),
-        doorbell_live,
-    )
+    _LOGGER.info("Setting up %s camera entit(y/ies)", len(devices))
     entities: list[EufyCamera] = []
     for serial in devices:
         try:
-            entities.append(
-                EufyCamera(coordinator, serial, doorbell_live=doorbell_live)
-            )
+            entities.append(EufyCamera(coordinator, serial))
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Failed to create camera entity for %s", serial)
     if entities:
@@ -57,43 +45,42 @@ async def async_setup_entry(
 
 
 class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
-    """Indoor: live RTSP. Doorbell: stills by default (Mega live flaps Idle/Streaming)."""
+    """Live RTSP via bridge go2rtc for doorbell + indoor.
+
+    Doorbell/battery cameras skip HA's HLS stream worker (which retries forever
+    and caused Idle↔Streaming flaps). The UI then uses go2rtc WebRTC against the
+    same RTSP URL — same pattern as the official mega-yfue HA integration.
+    """
 
     _attr_has_entity_name = True
     _attr_name = "Camera"
     _attr_entity_registry_enabled_default = True
+    _attr_supported_features = CameraEntityFeature.STREAM
 
     def __init__(
-        self,
-        coordinator: EufyCamerasCoordinator,
-        serial: str,
-        *,
-        doorbell_live: bool = False,
+        self, coordinator: EufyCamerasCoordinator, serial: str
     ) -> None:
-        # CoordinatorEntity does not call Entity/Camera __init__ — must init Camera.
         super().__init__(coordinator)
         Camera.__init__(self)
         self.serial = serial
         self._attr_unique_id = f"eufy_cameras_{serial}_camera"
         self._last_image: bytes | None = None
         kind = (coordinator.data.get(serial) or {}).get("kind")
-        self._kind = kind
-        # Mega doorbell live (WebRTC/RTC) often opens then dies within a second,
-        # which makes HA flap Streaming↔Idle. Default to push/event stills.
-        self._stills_only = kind == "doorbell" and not doorbell_live
-        if self._stills_only:
-            self._attr_supported_features = CameraEntityFeature(0)
-            self._attr_icon = "mdi:doorbell-video"
-        else:
-            self._attr_supported_features = CameraEntityFeature.STREAM
-            self._attr_icon = (
-                "mdi:doorbell-video" if kind == "doorbell" else "mdi:cctv"
-            )
+        self._attr_icon = (
+            "mdi:doorbell-video" if kind == "doorbell" else "mdi:cctv"
+        )
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         self.coordinator.client.on_event(self._handle_event)
         self.hass.async_create_task(self._prefetch_still())
+        if skip_ha_hls_worker(self.device_data):
+            _LOGGER.info(
+                "%s: using go2rtc WebRTC (not HA HLS) so a dropped Mega feed "
+                "does not Idle↔Streaming-loop. Turn OFF 'Preload stream' on this "
+                "entity if it is still flapping.",
+                self.serial,
+            )
 
     @property
     def device_data(self) -> dict[str, Any]:
@@ -127,10 +114,43 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
             ATTR_MODEL: data.get("model"),
             "power": data.get("power"),
             "capabilities": data.get("capabilities"),
-            "stream_mode": "stills" if self._stills_only else "live",
+            "stream_mode": "webrtc_rtsp",
             "rtsp_url": f"rtsp://{host}:8554/{self.serial}",
             "go2rtc_stream": f"http://{host}:1984/stream.html?src={self.serial}",
+            "skip_ha_hls": skip_ha_hls_worker(data),
         }
+
+    async def stream_source(self) -> str | None:
+        """Return go2rtc RTSP URL for doorbell and indoor."""
+        try:
+            result = await self.coordinator.client.stream_urls(self.serial)
+        except EufyMegaError as err:
+            _LOGGER.warning("stream.start failed for %s: %s", self.serial, err)
+            # Still advertise the conventional go2rtc path — connecting starts the cam.
+            host = (
+                self.coordinator.client.media_host
+                or self.coordinator.client.host
+            )
+            return f"rtsp://{host}:8554/{self.serial}"
+        rtsp = result.get("rtsp")
+        if rtsp:
+            return self._rewrite_loopback_host(str(rtsp))
+        path = result.get("path") or self.device_data.get("stream_path")
+        if path:
+            host = (
+                self.coordinator.client.media_host
+                or self.coordinator.client.host
+            )
+            port = self.coordinator.client.port
+            return f"http://{host}:{port}{path}"
+        host = self.coordinator.client.media_host or self.coordinator.client.host
+        return f"rtsp://{host}:8554/{self.serial}"
+
+    async def async_create_stream(self) -> Stream | None:
+        """Skip HA HLS worker for doorbell / battery (prevents reconnect spam)."""
+        if skip_ha_hls_worker(self.device_data):
+            return None
+        return await super().async_create_stream()
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
@@ -140,9 +160,7 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
         if self._last_image is None:
             await client.resolve_media_host()
 
-        # For doorbell stills, prefer stored/event; avoid mode=live (wakes RTC and often fails).
-        modes = ("stored", "", "live") if not self._stills_only else ("stored", "")
-        for mode in modes:
+        for mode in ("stored", "", "live"):
             try:
                 data = await client.fetch_snapshot(self.serial, mode=mode)
             except EufyMegaError as err:
@@ -180,41 +198,9 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
                 "event.refresh/snapshot failed for %s: %s", self.serial, err
             )
 
-        if self._last_image is None:
-            _LOGGER.warning(
-                "No still for %s from %s — ring/walk past once so Mega stores a "
-                "thumbnail (doorbell live video is unreliable on this cloud path)",
-                self.serial,
-                client.base_url,
-            )
         return self._last_image
 
-    async def stream_source(self) -> str | None:
-        """Return RTSP URL from go2rtc when live mode is enabled."""
-        if self._stills_only:
-            return None
-        try:
-            result = await self.coordinator.client.stream_urls(self.serial)
-        except EufyMegaError as err:
-            _LOGGER.warning(
-                "stream.start failed for %s: %s", self.serial, err
-            )
-            return None
-        rtsp = result.get("rtsp")
-        if rtsp:
-            return self._rewrite_loopback_host(str(rtsp))
-        path = result.get("path") or self.device_data.get("stream_path")
-        if path:
-            host = (
-                self.coordinator.client.media_host
-                or self.coordinator.client.host
-            )
-            port = self.coordinator.client.port
-            return f"http://{host}:{port}{path}"
-        return None
-
     def _rewrite_loopback_host(self, url: str) -> str:
-        """Point RTSP at a host HA Core can reach, not the bridge's 127.0.0.1."""
         parsed = urlparse(url)
         host = self.coordinator.client.media_host or self.coordinator.client.host
         if parsed.hostname in ("127.0.0.1", "localhost", "::1") and host:
@@ -225,7 +211,6 @@ class EufyCamera(CoordinatorEntity[EufyCamerasCoordinator], Camera):
 
     @callback
     def _handle_event(self, event: dict) -> None:
-        """Refresh stills when motion or ring push arrives."""
         if self.hass is None:
             return
         serial = (

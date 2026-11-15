@@ -51,11 +51,10 @@
     "step": {
       "init": {
         "title": "Eufy Cameras bridge",
-        "description": "Use the VM LAN IP (not 127.0.0.1). Doorbell live video is off by default — Mega often opens then drops the feed (Idle↔Streaming). Leave it off for stable stills; enable only to experiment.",
+        "description": "Use the VM LAN IP (not 127.0.0.1). Doorbell live uses go2rtc WebRTC (not HA HLS) to avoid reconnect loops.",
         "data": {
           "host": "Host",
-          "port": "Port",
-          "doorbell_live": "Try live stream for doorbell (experimental)"
+          "port": "Port"
         }
       }
     },
