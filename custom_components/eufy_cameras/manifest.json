@@ -7,7 +7,7 @@
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/mirimalulkasif/ha-eufy/issues",
   "requirements": [],
-  "version": "2.2.0",
+  "version": "2.2.1",
   "hassio": {
     "discovery": ["eufy_sdk"]
   }

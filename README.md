@@ -83,7 +83,7 @@ services:
 | Doorbell | T82xx (e.g. T8224) | Camera (**stills** from push/event thumbnails — no live WebRTC), motion, person, ring, switches, battery, model |
 | Indoor | T84xx (e.g. T8400) | Camera (live RTSP via go2rtc), motion, person, switches, battery, model, power |
 
-Both doorbell and indoor cameras use **live RTSP** through the Mega bridge + go2rtc.
+**Indoor** cameras use live RTSP. **Doorbells** default to **stills** (latest ring/motion image): Mega doorbell live video often opens and dies within a second, which flaps HA between Streaming and Idle. You can force doorbell live under **Configure → Try live stream for doorbell** (experimental).
 
 **Important on HA OS:** set the integration **host** to the VM’s **LAN IP**, not `127.0.0.1`.
 

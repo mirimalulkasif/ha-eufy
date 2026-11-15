@@ -7,8 +7,10 @@ PLATFORMS = ["binary_sensor", "switch", "camera", "sensor"]
 
 CONF_HOST = "host"
 CONF_PORT = "port"
+CONF_DOORBELL_LIVE = "doorbell_live"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 3000
+DEFAULT_DOORBELL_LIVE = False
 
 # Mega SDK bridge WebSocket path (ha-eufy-sdk-bridge)
 WS_PATH = "/ws"

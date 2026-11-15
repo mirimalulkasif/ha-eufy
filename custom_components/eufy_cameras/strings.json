@@ -51,10 +51,11 @@
     "step": {
       "init": {
         "title": "Eufy Cameras bridge",
-        "description": "Use the Home Assistant VM LAN IP (not 127.0.0.1) so snapshots and RTSP work from HA Core.",
+        "description": "Use the VM LAN IP (not 127.0.0.1). Doorbell live video is off by default — Mega often opens then drops the feed (Idle↔Streaming). Leave it off for stable stills; enable only to experiment.",
         "data": {
           "host": "Host",
-          "port": "Port"
+          "port": "Port",
+          "doorbell_live": "Try live stream for doorbell (experimental)"
         }
       }
     },
